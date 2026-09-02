@@ -1,0 +1,36 @@
+{
+  "name": "otter-shell",
+  "private": true,
+  "version": "3.0.0",
+  "license": "Apache-2.0",
+  "author": "LittleJeter",
+  "type": "module",
+  "description": "TEST / PORTFOLIO PROJECT (not production security tooling) — Otter Shell, a defensive threat-hunt authoring & tracking console: 7-platform hunt query generator, ATT&CK coverage, CISA KEV, Sigma import/export.",
+  "keywords": [
+    "test-project",
+    "portfolio",
+    "demo",
+    "threat-hunting",
+    "detection-engineering",
+    "sigma",
+    "mitre-attack",
+    "siem"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "headers": "node scripts/gen-headers.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.1.1",
+    "vite": "^8.2.2",
+    "vitest": "^4.1.11"
+  }
+}
