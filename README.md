@@ -48,7 +48,7 @@ internet-facing stack.
 
 ## Run it
 
-Requires Node 18+.
+Requires Node 20.19+ or 22.12+ (Vite 8).
 
 ```bash
 npm install
@@ -70,6 +70,8 @@ npm test          # Vitest suite (54 tests)
 
 - `src/__tests__/sanitizers.test.js` — the untrusted-input sanitizers, including a
   regression test for a workspace file that used to blank the page.
+- `src/__tests__/hardening-v19.test.js` — the normalization gate, the dangerous-command
+  and schema-grounding checks, ATT&CK v19 remapping, and edit-history round-trips.
 - `src/__tests__/library.test.js` — library invariants (all 18 hunts carry a query for
   all 7 platforms), the Sigma round-trip, the linter's silence on the curated library,
   ATT&CK helpers, KEV matching and the markdown export.
@@ -84,6 +86,21 @@ says the query itself looks wrong — that is the count the zero-warnings claim 
 query", which is expected: most curated queries take their lookback from the console's own
 time picker rather than hardcoding one. The lint header states the warning count first, so a
 note can never be misread as a failing query.
+
+### What the query checks cover
+
+- **Dangerous commands (⛔):** hunt queries are read-only. SPL `| delete` / `sendemail` /
+  `outputlookup`, KQL `.set` / `.drop` / `externaldata` / `http_request` and XQL
+  `target type=dataset` are flagged live while editing, block a silent copy or save, and
+  raise a red banner on generated hunts.
+- **Source grounding (ℹ/⚠):** table, dataset and event names are checked against
+  allowlists built from vendor docs. It checks source names, not every field, and it does
+  not prove a query runs.
+- **Official docs links** sit under every query so analysts verify against the vendor.
+- **ATT&CK v19:** the retired Defense Evasion tactic is Stealth / Defense Impairment, and
+  revoked T1562 IDs are remapped on import and generation.
+- **Query editing:** edits bump the hunt version, log the previous text and reset validation
+  to Unverified.
 
 ### Security posture
 

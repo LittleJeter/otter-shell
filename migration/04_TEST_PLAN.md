@@ -376,7 +376,7 @@ import { buildNavLayer } from "@/lib/nav";
 
 test("Navigator layer has correct top-level shape", () => {
   const layer = buildNavLayer([], { name: "Test", sector: "Test" } as any);
-  expect(layer.versions).toEqual({ attack: "15", navigator: "4.9.1", layer: "4.5" });
+  expect(layer.versions).toEqual({ attack: "19", navigator: "5.1.0", layer: "4.5" });
   expect(layer.domain).toBe("enterprise-attack");
   expect(Array.isArray(layer.techniques)).toBe(true);
 });
