@@ -8,8 +8,8 @@ Requires env:
     ANTHROPIC_API_KEY                  (required)
     OTTER_SHELL_FRONTEND_ORIGIN        (required in prod; defaults to localhost in dev)
     OTTER_SHELL_DEV                    (set to "1" to allow CORS wildcard for local dev)
-    OTTER_SHELL_MAX_TOKENS             (optional, default 1500)
-    OTTER_SHELL_MODEL                  (optional, default claude-sonnet-4-5)
+    OTTER_SHELL_MAX_TOKENS             (optional, default 2500; requests above it are clamped)
+    OTTER_SHELL_MODEL                  (optional, default claude-sonnet-4-6)
 
 Dependencies (pyproject.toml):
     fastapi >= 0.115
@@ -25,11 +25,13 @@ import logging
 import os
 import time
 from collections import defaultdict, deque
-from typing import Deque
+from typing import Deque, Literal, Optional
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 # ---------- config ----------
@@ -39,11 +41,24 @@ if not API_KEY:
 
 FRONTEND_ORIGIN = os.environ.get("OTTER_SHELL_FRONTEND_ORIGIN", "http://localhost:5173")
 DEV_MODE = os.environ.get("OTTER_SHELL_DEV", "") == "1"
-MAX_TOKENS_CAP = int(os.environ.get("OTTER_SHELL_MAX_TOKENS", "1500"))
-MODEL = os.environ.get("OTTER_SHELL_MODEL", "claude-sonnet-4-5")
+MAX_TOKENS_CAP = int(os.environ.get("OTTER_SHELL_MAX_TOKENS", "2500"))
+MODEL = os.environ.get("OTTER_SHELL_MODEL", "claude-sonnet-4-6")
+SPEC = "otter-shell/proxy/v1.1"
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
 WEB_SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search"}
+# Named search scopes. The frontend may pick one by NAME only — it can never send a tool
+# definition or a domain list, so a compromised page cannot widen what the model may search.
+# Keep "docs" in sync with DOC_DOMAINS in src/OtterShell.jsx (a test asserts this).
+DOC_DOMAINS = [
+    "library.humio.com", "docs-cortex.paloaltonetworks.com", "learn.microsoft.com",
+    "www.elastic.co", "docs.cloud.google.com", "help.splunk.com",
+]
+SEARCH_SCOPES = {
+    "web": {**WEB_SEARCH_TOOL, "max_uses": 4},
+    "docs": {**WEB_SEARCH_TOOL, "max_uses": 3, "allowed_domains": DOC_DOMAINS},
+    "cisa": {**WEB_SEARCH_TOOL, "max_uses": 3, "allowed_domains": ["cisa.gov", "www.cisa.gov"]},
+}
 
 START_TIME = time.time()
 
@@ -79,7 +94,7 @@ def _rate_limited(ip: str) -> tuple[bool, int]:
 
 
 # ---------- app ----------
-app = FastAPI(title="Otter Shell Proxy", version="0.1.0")
+app = FastAPI(title="Otter Shell Proxy", version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -90,11 +105,24 @@ app.add_middleware(
 )
 
 
+@app.exception_handler(HTTPException)
+async def _http_error(_: Request, exc: HTTPException) -> JSONResponse:
+    # Same error shape the Anthropic API uses, so the frontend has one code path.
+    return JSONResponse({"error": {"message": str(exc.detail)}}, status_code=exc.status_code, headers=exc.headers)
+
+
+@app.exception_handler(RequestValidationError)
+async def _bad_request(_: Request, exc: RequestValidationError) -> JSONResponse:
+    fields = ", ".join(sorted({str(e["loc"][-1]) for e in exc.errors()}))
+    return JSONResponse({"error": {"message": f"invalid request ({fields})"}}, status_code=400)
+
+
 class ClaudeRequest(BaseModel):
-    system: str = Field(..., min_length=1, max_length=8000)
+    system: str = Field(..., min_length=1, max_length=12000)
     user: str = Field(..., min_length=1, max_length=8000)
     enableWebSearch: bool = False
-    maxTokens: int = Field(1000, ge=1, le=MAX_TOKENS_CAP)
+    searchScope: Optional[Literal["web", "docs", "cisa"]] = None
+    maxTokens: int = Field(1000, ge=1)  # clamped to MAX_TOKENS_CAP below, not rejected
 
 
 @app.get("/health")
@@ -104,7 +132,7 @@ def health() -> dict:
 
 @app.get("/version")
 def version() -> dict:
-    return {"version": "0.1.0", "spec": "otter-shell/proxy/v1"}
+    return {"version": "0.2.0", "spec": SPEC}
 
 
 @app.post("/api/claude")
@@ -113,8 +141,8 @@ async def claude(req: ClaudeRequest, request: Request, response: Response) -> di
 
     limited, window = _rate_limited(client_ip)
     if limited:
-        response.headers["Retry-After"] = str(window)
-        raise HTTPException(status_code=429, detail=f"rate limit ({window}s window)")
+        # Headers must ride on the exception: ones set on `response` are dropped when raising.
+        raise HTTPException(status_code=429, detail=f"rate limit ({window}s window)", headers={"Retry-After": str(window)})
 
     body = {
         "model": MODEL,
@@ -123,7 +151,7 @@ async def claude(req: ClaudeRequest, request: Request, response: Response) -> di
         "messages": [{"role": "user", "content": req.user}],
     }
     if req.enableWebSearch:
-        body["tools"] = [WEB_SEARCH_TOOL]
+        body["tools"] = [SEARCH_SCOPES[req.searchScope or "web"]]
 
     headers = {
         "x-api-key": API_KEY,

@@ -1,6 +1,6 @@
 # Proxy Contract
 
-Why this exists, what it does, what it doesn't, and how to deploy it. Reference implementation in `proxy_starter.py`.
+Why this exists, what it does, what it doesn't, and how to deploy it. Reference implementation in `proxy_starter.py`; contract tests in `test_proxy.py`. Current spec: `otter-shell/proxy/v1.1`.
 
 ## Why
 
@@ -15,14 +15,25 @@ POST /api/claude
 Content-Type: application/json
 
 {
-  "system": "You are a senior threat-hunt engineer...",   // string, required, <= 8000 chars
+  "system": "You are a senior threat-hunt engineer...",   // string, required, <= 12000 chars
   "user": "Generate a hunt for T1059.001...",             // string, required, <= 8000 chars
   "enableWebSearch": true,                                // boolean, optional, default false
-  "maxTokens": 1000                                       // number, optional, default 1000, hard cap 1500
+  "searchScope": "docs",                                  // "web" | "docs" | "cisa", optional, default "web"
+  "maxTokens": 1000                                       // number, optional, default 1000, clamped to 2500
 }
 ```
 
-That's the whole API. Three optional knobs (`enableWebSearch`, `maxTokens`, plus future model selection). The frontend does not get to set arbitrary tools, system prompts of unlimited length, message arrays, or the model string.
+That's the whole API. The frontend does not get to set tool definitions, domain lists, message arrays, or the model string.
+
+`system` is 12000 (v1.0 was 8000) because the generator ships vendor reference cards in its instructions. `searchScope` picks a fixed server-side tool config **by name**:
+
+| Scope | Tool config |
+|-------|-------------|
+| `web` | open web search, `max_uses` 4 |
+| `docs` | vendor-documentation domains only (`DOC_DOMAINS`), `max_uses` 3 |
+| `cisa` | `cisa.gov` / `www.cisa.gov` only, `max_uses` 3 |
+
+`DOC_DOMAINS` exists in both `proxy_starter.py` and `src/OtterShell.jsx`; a test fails if they drift. The frontend retries a failed `docs` request once with search disabled.
 
 ## What the proxy returns
 
@@ -36,7 +47,7 @@ The Anthropic API's `messages` response body, unmodified — same shape the arti
   "content": [
     { "type": "text", "text": "{\"hunt\": {...}}" }
   ],
-  "model": "claude-sonnet-4-20250514",
+  "model": "claude-sonnet-4-6",
   "stop_reason": "end_turn",
   "usage": { "input_tokens": 234, "output_tokens": 412 }
 }
@@ -47,12 +58,12 @@ The frontend extracts `data.content.filter(b => b.type === "text").map(b => b.te
 ## What the proxy does on every request
 
 1. **CORS preflight** — `OPTIONS /api/claude` returns the configured allow-origin (the frontend domain in prod, `*` in local dev only).
-2. **Request validation** — Pydantic model with strict bounds: `system` and `user` length-capped, `maxTokens` clamped to `[1, 1500]`, `enableWebSearch` boolean.
+2. **Request validation** — Pydantic model with strict bounds: `system` and `user` length-capped, `maxTokens` clamped (not rejected) to `[1, 2500]`, `enableWebSearch` boolean, `searchScope` an enum. Invalid requests return `400 {"error": {"message": ...}}`.
 3. **Rate limiting** — per-IP token bucket. Default: 20 requests/minute, 200 requests/hour. In-memory is fine for v0.1; swap for Redis if multi-instance.
-4. **Model construction** — fixed model string (`claude-sonnet-4-5` or whatever the deploy targets). Frontend cannot choose.
-5. **Tool construction** — if `enableWebSearch`, attach `[{"type":"web_search_20250305","name":"web_search"}]`; otherwise omit. Frontend cannot attach arbitrary tools.
+4. **Model construction** — fixed model string (default `claude-sonnet-4-6`, override with `OTTER_SHELL_MODEL`). Frontend cannot choose.
+5. **Tool construction** — if `enableWebSearch`, attach the tool config for the named `searchScope` (table above); otherwise omit. Frontend cannot attach arbitrary tools or domains.
 6. **Forward** — `POST` to `https://api.anthropic.com/v1/messages` with the server's `x-api-key` header.
-7. **Pass-through** — return the upstream JSON verbatim with HTTP status 200 on success. On upstream non-2xx, return status `502 Bad Gateway` with a `{ "error": "..." }` body.
+7. **Pass-through** — return the upstream JSON verbatim with HTTP status 200 on success. On upstream non-2xx, return status `502 Bad Gateway` with a `{ "error": { "message": "..." } }` body (the same shape the Anthropic API uses, so the frontend has one error path). `429` carries a `Retry-After` header.
 8. **Log** — request timestamp, source IP (hashed), `enableWebSearch` flag, input/output token counts, latency, status. **Do not log prompts.** They may contain user IOCs, internal hostnames, or other sensitive triage data.
 
 ## What the proxy does NOT do
@@ -86,7 +97,7 @@ In-memory dict keyed by `hashlib.sha256(ip.encode()).hexdigest()` is enough for 
 
 ## Cost guardrails
 
-- `maxTokens` capped at 1500 server-side regardless of what the frontend sends.
+- `maxTokens` capped at 2500 server-side (`OTTER_SHELL_MAX_TOKENS`) regardless of what the frontend sends.
 - Input length capped at 8000 chars per field (system + user).
 - Optional monthly spend cap: track total `output_tokens` in memory (or a sqlite file) and refuse new requests once a configurable threshold is hit. Recommended default: $35/month equivalent (~3M output tokens at Sonnet pricing — verify against current pricing at deploy time).
 
@@ -105,17 +116,17 @@ For any of them, set:
 ```
 ANTHROPIC_API_KEY=sk-ant-...
 OTTER_SHELL_FRONTEND_ORIGIN=https://otter-shell.yourdomain.com
-OTTER_SHELL_MAX_TOKENS=1500
+OTTER_SHELL_MAX_TOKENS=2500
 OTTER_SHELL_MONTHLY_TOKEN_CAP=3000000
 ```
 
 ## Health check
 
-`GET /health` returns `{"ok": true, "model": "claude-sonnet-4-5", "uptime_s": 1234}`. Used by deploy platform health probes and by a future "proxy reachable?" indicator in the frontend.
+`GET /health` returns `{"ok": true, "model": "claude-sonnet-4-6", "uptime_s": 1234}`. Used by deploy platform health probes and by a future "proxy reachable?" indicator in the frontend.
 
 ## Versioning
 
-`GET /version` returns `{"version": "0.1.0", "spec": "otter-shell/proxy/v1"}`. The frontend can warn if the spec doesn't match its expectations.
+`GET /version` returns `{"version": "0.2.0", "spec": "otter-shell/proxy/v1.1"}`. The frontend can warn if the spec doesn't match its expectations.
 
 ## Security posture
 

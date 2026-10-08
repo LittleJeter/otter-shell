@@ -70,6 +70,10 @@ npm test          # Vitest suite (54 tests)
 
 - `src/__tests__/sanitizers.test.js` — the untrusted-input sanitizers, including a
   regression test for a workspace file that used to blank the page.
+- `src/__tests__/app-ui.test.jsx`, `generator.test.jsx`, `proxy-client.test.js` — the real
+  component driven in jsdom (editor, danger gating, workspace round-trip), the generator against a
+  mocked hostile proxy, and the proxy request contract. `migration/test_proxy.py` (pytest) covers
+  the reference proxy. CI (`.github/workflows/ci.yml`) runs both plus `npm audit`.
 - `src/__tests__/hardening-v19.test.js` — the normalization gate, the dangerous-command
   and schema-grounding checks, ATT&CK v19 remapping, and edit-history round-trips.
 - `src/__tests__/library.test.js` — library invariants (all 18 hunts carry a query for
@@ -150,8 +154,8 @@ reproduced first, and what residual risk is knowingly accepted.
 The AI features read one environment variable, `VITE_CLAUDE_PROXY_URL`. There is no
 hardcoded endpoint and no code to edit.
 
-1. Read `migration/03_PROXY_CONTRACT.md` and run `migration/proxy_starter.py`
-   (FastAPI; keeps your `ANTHROPIC_API_KEY` server-side only).
+1. Read `migration/03_PROXY_CONTRACT.md` (spec v1.1) and run `migration/proxy_starter.py`
+   (FastAPI; keeps your `ANTHROPIC_API_KEY` server-side only; `pip install -r migration/requirements.txt`).
 2. Copy `.env.example` to `.env.local` and point the variable at it:
 
    ```bash
