@@ -100,6 +100,11 @@ note can never be misread as a failing query.
 - **Source grounding (ℹ/⚠):** table, dataset and event names are checked against
   allowlists built from vendor docs. It checks source names, not every field, and it does
   not prove a query runs.
+- **Field names (Elastic only):** ES|QL fields under an ECS namespace are checked against the
+  published ECS field list (`src/data/ecs-fields.json`, regenerate with `npm run ecs`), with a
+  "did you mean" hint. Integration fields (`winlog.*`, `o365.*`), Elastic `.Ext.` extensions and
+  free-form objects are not flagged. The other six platforms are checked at the table / dataset /
+  event-type level only: no machine-readable, publicly fetchable schema was available for them.
 - **Official docs links** sit under every query so analysts verify against the vendor.
 - **ATT&CK v19:** the retired Defense Evasion tactic is Stealth / Defense Impairment, and
   revoked T1562 IDs are remapped on import and generation.

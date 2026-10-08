@@ -22,7 +22,8 @@
     "preview": "vite preview",
     "headers": "node scripts/gen-headers.mjs",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "ecs": "node scripts/gen-ecs-fields.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",

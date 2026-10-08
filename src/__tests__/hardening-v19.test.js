@@ -5,7 +5,7 @@
 import { describe, it, expect } from "vitest";
 import {
   HUNTS, PLATFORM_IDS, withLifecycle, lintQuery, dangerIssues, groundingIssues, sigmaToHunt,
-  atomicUrl, buildNavLayer, huntToMarkdown, sanitizeHunt, sanitizeBuiltinMeta,
+  atomicUrl, buildNavLayer, huntToMarkdown, sanitizeHunt, sanitizeBuiltinMeta, ecsFieldIssues, REF_CARDS,
 } from "../OtterShell.jsx";
 
 describe("normalization gate", () => {
@@ -103,5 +103,41 @@ describe("markdown report", () => {
     });
     expect(md).toContain("````\nre.regex");
     expect(md).toContain("## Query edit history");
+  });
+});
+
+describe("ECS field check (Elastic)", () => {
+  const msgs = (q) => ecsFieldIssues(q).map((i) => i.msg);
+
+  it("flags a misspelled ECS field and suggests the right one", () => {
+    const m = msgs('FROM logs-* | WHERE process.comand_line == "x"');
+    expect(m).toHaveLength(1);
+    expect(m[0]).toMatch(/process\.comand_line.*did you mean "process\.command_line"/);
+  });
+
+  it("leaves integration fields, Elastic extensions, free-form objects and index patterns alone", () => {
+    const q = [
+      "FROM logs-endpoint.events.process-*, logs-windows.*",
+      '| WHERE winlog.event_data.TargetUserName == "x" AND o365.audit.Operation == "y"',
+      "AND process.Ext.token.integrity_level_name == 1 AND labels.team == 2 AND process.parent.name IN (\"a\")",
+      "| STATS n = COUNT(*) BY host.name, user.name",
+    ].join("\n");
+    expect(msgs(q)).toEqual([]);
+  });
+
+  it("ignores field-looking text inside strings and comments", () => {
+    expect(msgs('FROM logs-* // process.fake_field here\n| WHERE message LIKE "*process.not_a_field*"')).toEqual([]);
+  });
+
+  it("is wired into groundingIssues for elastic only", () => {
+    expect(groundingIssues("elastic", "FROM logs-* | WHERE event.categroy == 1").length).toBe(1);
+    expect(groundingIssues("splunk", "index=a event.categroy=1")).toEqual([]);
+  });
+
+  it("every ECS field the generator's reference card advertises exists in ECS", () => {
+    const named = REF_CARDS.elastic.match(/[a-z_@]+(?:\.[a-z_]+)*(?=[,.])/g).filter((f) => f.includes(".") || f === "@timestamp");
+    expect(named.length).toBeGreaterThan(10);
+    const bad = named.filter((f) => ecsFieldIssues("FROM logs-* | WHERE " + f + " == 1").length);
+    expect(bad).toEqual([]);
   });
 });
